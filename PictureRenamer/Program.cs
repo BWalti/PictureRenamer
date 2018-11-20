@@ -3,7 +3,9 @@
     using System;
     using System.IO;
     using System.Threading.Tasks;
+
     using Microsoft.Extensions.Configuration;
+
     using Serilog;
 
     internal class Program
@@ -13,7 +15,7 @@
             // Read the application settings file containing the Serilog configuration.
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(AppContext.BaseDirectory)
-                 .AddJsonFile("appsettings.json", false, false)
+                .AddJsonFile("appsettings.json", false, false)
                 .Build();
 
             // Setting up the static Serilog logger.
@@ -28,9 +30,11 @@
 
         private static Task Run()
         {
-            var input = @"Z:\Import-Queue";
-            var output = @"Z:\Processed";
-
+            var input = @"C:\Users\bwalt\Pictures\DiGa Möbel";
+            var output = @"C:\Users\bwalt\Pictures\DiGa Möbel";
+            
+            // var input = @"Z:\Import-Queue";
+            // var output = @"Z:\Processed";
             var inputDirectoryInfo = new DirectoryInfo(input);
             var outputDirectoryInfo = new DirectoryInfo(output);
 
@@ -45,7 +49,8 @@
             }
 
             var pipeline = new FileRenamerPipeline();
-            //return pipeline.RunMover(inputDirectoryInfo, outputDirectoryInfo);
+
+            // return pipeline.RunMover(inputDirectoryInfo, outputDirectoryInfo);
             return pipeline.RunDuplicateScanner(inputDirectoryInfo, outputDirectoryInfo);
         }
     }
