@@ -29,6 +29,9 @@
 
         public string PossibleTargetPath { get; private set; }
 
+        public string Target { get; set; }
+        public ulong Hash { get; set; }
+
         public void SetPossibleSolution(string targetPath, string targetFileName)
         {
             this.PossibleTargetPath = targetPath;

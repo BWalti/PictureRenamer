@@ -45,7 +45,8 @@
             }
 
             var pipeline = new FileRenamerPipeline();
-            return pipeline.Run(inputDirectoryInfo, outputDirectoryInfo);
+            //return pipeline.RunMover(inputDirectoryInfo, outputDirectoryInfo);
+            return pipeline.RunDuplicateScanner(inputDirectoryInfo, outputDirectoryInfo);
         }
     }
 }

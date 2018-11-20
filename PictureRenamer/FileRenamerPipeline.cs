@@ -4,18 +4,17 @@
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Net.Sockets;
     using System.Threading;
     using System.Threading.Tasks;
     using System.Threading.Tasks.Dataflow;
+    using DupImageLib;
     using MetadataExtractor;
     using MetadataExtractor.Formats.Exif;
     using Serilog;
 
     public class FileRenamerPipeline
     {
-        private readonly IPropagatorBlock<ProcessContext, PhotoContext> fileScannerBlock;
-        private readonly ActionBlock<PhotoContext> mover;
-
         private static readonly ExecutionDataflowBlockOptions SingleExecution = new ExecutionDataflowBlockOptions
         {
             MaxDegreeOfParallelism = 1
@@ -26,33 +25,133 @@
             PropagateCompletion = true
         };
 
+        private readonly ImageHashes imageHasher;
+
         public FileRenamerPipeline()
         {
-            this.fileScannerBlock = CreateFileScannerBlock();
+            // Create new ImageHashes instance using ImageMackick as image manipulation library
+            this.imageHasher = new ImageHashes(new ImageMagickTransformer());
+        }
+
+        public Task RunMover(DirectoryInfo input, DirectoryInfo output)
+        {
+            var fileScannerBlock = CreateFileScannerBlock();
             var analysis = CreateAnalysisBlock();
+
             var filter = CreateFilterBlock();
             var suggestion = CreateSuggestionBlock();
-            this.mover = CreateMoverAction();
+            var mover = CreateMoverAction();
 
-            this.fileScannerBlock.LinkTo(analysis, DataflowLinkOptions);
+            fileScannerBlock.LinkTo(analysis, DataflowLinkOptions);
             analysis.LinkTo(filter, DataflowLinkOptions);
             filter.LinkTo(suggestion, DataflowLinkOptions);
-            suggestion.LinkTo(this.mover, DataflowLinkOptions);
-        }
+            suggestion.LinkTo(mover, DataflowLinkOptions);
 
-        public Task Run(DirectoryInfo input, DirectoryInfo output)
-        {
             var processContext = new ProcessContext(input, output);
+            fileScannerBlock.Post(processContext);
+            fileScannerBlock.Complete();
 
-            this.fileScannerBlock.Post(processContext);
-            this.fileScannerBlock.Complete();
-
-            return this.mover.Completion;
+            return mover.Completion;
         }
 
-        private static ActionBlock<PhotoContext> CreateMoverAction()
+        public Task RunDuplicateScanner(DirectoryInfo input, DirectoryInfo output)
         {
-            return new ActionBlock<PhotoContext>(context =>
+            var fileScannerBlock = CreateFileScannerBlock(false, "*.jpg");
+            var analysis = CreateAnalysisBlock();
+            var hashCalculator = this.CreateHashCalculator();
+            var collectedHashes = this.CollectAll<PhotoContext>();
+            var findDuplicates = this.FindExactMatches();
+            var processDuplicates = new ActionBlock<Dictionary<ulong, List<PhotoContext>>>(dict =>
+            {
+                Log.Warning($"Found {dict.Count}# images with duplicates:");
+                foreach (var entry in dict)
+                {
+                    var allImages = string.Join(", ", entry.Value.Select(pc => pc.Source.FullName));
+                    Log.Warning($"- {entry.Key}: {allImages}");
+                }
+            });
+
+            fileScannerBlock.LinkTo(analysis, DataflowLinkOptions);
+            analysis.LinkTo(hashCalculator, DataflowLinkOptions);
+            hashCalculator.LinkTo(collectedHashes, DataflowLinkOptions);
+            collectedHashes.LinkTo(findDuplicates, DataflowLinkOptions);
+            findDuplicates.LinkTo(processDuplicates, DataflowLinkOptions);
+
+            var processContext = new ProcessContext(input, output);
+            fileScannerBlock.Post(processContext);
+            fileScannerBlock.Complete();
+
+            return processDuplicates.Completion;
+        }
+
+        private IPropagatorBlock<IEnumerable<PhotoContext>, Dictionary<ulong, List<PhotoContext>>> FindExactMatches()
+        {
+            var output = new BufferBlock<Dictionary<ulong, List<PhotoContext>>>();
+
+            var input = new ActionBlock<IEnumerable<PhotoContext>>(context =>
+            {
+                var grouped = from entry in context
+                    group entry by entry.Hash
+                    into g
+                    select new {Hash = g.Key, Items = g.ToList()};
+
+                var resultingDictionary = grouped
+                    .Where(g => g.Items.Count > 1)
+                    .ToDictionary(x => x.Hash, x => x.Items);
+
+                output.Post(resultingDictionary);
+            });
+
+            input.Completion.ContinueWith(task => output.Complete());
+
+            return DataflowBlock.Encapsulate(input, output);
+        }
+
+        private IPropagatorBlock<T, IEnumerable<T>> CollectAll<T>()
+        {
+            var all = new List<T>();
+
+            var output = new BufferBlock<IEnumerable<T>>();
+
+            var input = new ActionBlock<T>(context =>
+            {
+                all.Add(context);
+            }, SingleExecution);
+
+            input.Completion.ContinueWith(task =>
+            {
+                output.Post(all);
+                output.Complete();
+            });
+
+            return DataflowBlock.Encapsulate(input, output);
+        }
+
+        private IPropagatorBlock<PhotoContext, PhotoContext> CreateHashCalculator()
+        {
+            var output = new BufferBlock<PhotoContext>();
+
+            var input = new ActionBlock<PhotoContext>(context =>
+                {
+                    var hash = this.imageHasher.CalculateAverageHash64(context.Source.FullName);
+                    context.Hash = hash;
+                    Log.Information($"Hash: {context.Source.Name} = {hash}");
+                },
+                new ExecutionDataflowBlockOptions
+                {
+                    MaxDegreeOfParallelism = 8
+                });
+
+            input.Completion.ContinueWith(task => output.Complete());
+
+            return DataflowBlock.Encapsulate(input, output);
+        }
+
+        private static IPropagatorBlock<PhotoContext, PhotoContext> CreateMoverAction()
+        {
+            var output = new BufferBlock<PhotoContext>();
+
+            var input = new ActionBlock<PhotoContext>(context =>
                 {
                     var targetFullPath = Path.Combine(context.PossibleTargetPath, context.PossibleTargetFileName);
 
@@ -74,8 +173,14 @@
 
                     Log.Information($"Moving: {context.Source.FullName} to {targetFullPath}");
                     File.Move(context.Source.FullName, targetFullPath);
+
+                    context.Target = targetFullPath;
                 },
                 SingleExecution);
+
+            input.Completion.ContinueWith(task => output.Complete());
+
+            return DataflowBlock.Encapsulate(input, output);
         }
 
         private static IPropagatorBlock<PhotoContext, PhotoContext> CreateFilterBlock()
@@ -103,13 +208,17 @@
             return DataflowBlock.Encapsulate(input, output);
         }
 
-        private static IPropagatorBlock<ProcessContext, PhotoContext> CreateFileScannerBlock()
+        private static IPropagatorBlock<ProcessContext, PhotoContext> CreateFileScannerBlock(bool useInput = true, string filter="*")
         {
             var output = new BufferBlock<PhotoContext>();
 
             var input = new ActionBlock<ProcessContext>(context =>
                 {
-                    var allFiles = context.SourceRoot.EnumerateFiles("*", SearchOption.AllDirectories);
+                    var contextDirectory = useInput 
+                        ? context.SourceRoot 
+                        : context.TargetRoot;
+
+                    var allFiles = contextDirectory.EnumerateFiles(filter, SearchOption.AllDirectories);
 
                     foreach (var fileInfo in allFiles)
                     {
