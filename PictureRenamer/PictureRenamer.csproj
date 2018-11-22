@@ -7,8 +7,12 @@
 
   <ItemGroup>
     <PackageReference Include="CoenM.ImageSharp.ImageHash" Version="1.0.0-beta0001" />
+    <PackageReference Include="LiteDB" Version="4.1.4" />
     <PackageReference Include="MetadataExtractor" Version="2.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="2.1.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="2.1.4" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="2.1.1" />
+    <PackageReference Include="Ninject" Version="3.3.4" />
     <PackageReference Include="Serilog.Settings.Configuration" Version="3.0.1" />
     <PackageReference Include="Serilog.Sinks.ColoredConsole" Version="3.0.1" />
     <PackageReference Include="Serilog.Sinks.RollingFile" Version="3.3.0" />
