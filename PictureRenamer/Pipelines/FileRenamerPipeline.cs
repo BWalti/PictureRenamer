@@ -25,7 +25,7 @@
         public Task Run()
         {
             var fileScannerBlock = BlockCreator.CreateFileScannerBlock();
-            var analysis = BlockCreator.CreateAnalysisBlock();
+            var analysis = BlockCreator.ReadImageMetadataBlock();
 
             var filter = BlockCreator.CreateFilterBlock();
             var suggestion = BlockCreator.CreateSuggestionBlock();

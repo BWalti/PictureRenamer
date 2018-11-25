@@ -16,28 +16,25 @@
         private static readonly ExecutionDataflowBlockOptions SingleExecution =
             new ExecutionDataflowBlockOptions {MaxDegreeOfParallelism = 1};
 
-        private readonly string fileFilter;
-
         private readonly IImageHash imageHasher;
         private readonly DirectoryInfo inputDirectoryInfo;
         private readonly DirectoryInfo outputDirectoryInfo;
         private readonly DirectoryInfo recycleBin;
 
         public DuplicateMediaItemPipeline(DirectoryInfo inputDirectoryInfo, DirectoryInfo outputDirectoryInfo,
-            DirectoryInfo recycleBin, string fileFilter, IImageHash imageHasher)
+            DirectoryInfo recycleBin, IImageHash imageHasher)
         {
             this.inputDirectoryInfo = inputDirectoryInfo;
             this.outputDirectoryInfo = outputDirectoryInfo;
             this.recycleBin = recycleBin;
-            this.fileFilter = fileFilter;
             this.imageHasher = imageHasher;
         }
 
         public Task Run()
         {
-            var fileScannerBlock = BlockCreator.CreateFileScannerBlock(false, this.fileFilter);
+            var fileScannerBlock = BlockCreator.CreateFileScannerBlock(false);
 
-            //var analysis = CreateAnalysisBlock();
+            //var analysis = ReadImageMetadataBlock();
             var hashCalculator = BlockCreator.CreateHashCalculator(this.imageHasher);
             var collectedHashes = BlockCreator.CollectAll<PhotoContext>();
             var findDuplicates = BlockCreator.FindExactMatches();
@@ -62,7 +59,6 @@
 
             fileScannerBlock.LinkTo(hashCalculator, DataflowLinkOptions);
 
-            //analysis.LinkTo(hashCalculator, DataflowLinkOptions);
             hashCalculator.LinkTo(collectedHashes, DataflowLinkOptions);
             collectedHashes.LinkTo(findDuplicates, DataflowLinkOptions);
             findDuplicates.LinkTo(processDuplicates, DataflowLinkOptions);
@@ -73,10 +69,5 @@
 
             return processDuplicates.Completion;
         }
-    }
-
-    public interface IRunnablePipeline
-    {
-        Task Run();
     }
 }

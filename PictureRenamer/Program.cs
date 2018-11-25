@@ -1,13 +1,9 @@
 ﻿namespace PictureRenamer
 {
     using System;
-    using System.Collections.Generic;
     using System.IO;
-    using System.Linq;
-    using System.Runtime.CompilerServices;
     using System.Threading.Tasks;
     using CoenM.ImageHash.HashAlgorithms;
-    using LiteDB;
     using Microsoft.Extensions.Configuration;
     using PictureRenamer.Pipelines;
     using Serilog;
@@ -36,9 +32,13 @@
         {
             // var input = @"C:\Users\bwalt\Pictures\DiGa Möbel";
             // var output = @"C:\Users\bwalt\Pictures\DiGa Möbel";
-            var input = @"Z:\Import-Queue";
-            var output = @"Z:\Processed";
-            var recycleBin = @"Z:\Duplicates";
+            //var input = @"Z:\Import-Queue";
+            //var output = @"Z:\Processed";
+            //var recycleBin = @"Z:\Duplicates";
+
+            var input = @"D:\PicRenameSpielwiese\Input";
+            var output = @"D:\PicRenameSpielwiese\Processed";
+            var recycleBin = @"D:\PicRenameSpielwiese\Recycle";
 
             var inputDirectoryInfo = new DirectoryInfo(input);
             var outputDirectoryInfo = new DirectoryInfo(output);
@@ -59,19 +59,15 @@
                 throw new ArgumentException("RecycleBin directory does not exist!", nameof(output));
             }
 
-            var scanned = outputDirectoryInfo.EnumerateFiles("*.jpg|*.png|*.jpeg|*.mp4").ToList();
-
-            using (var db = new LiteDatabase(@"MyData.db"))
-            {
-                var mediaItemCollection = db.GetCollection<MediaItemQuickScanInfo>();
-                mediaItemCollection.EnsureIndex(info => info.FullName);
-
-                var pipeline = CreatePipeline(PipelineKind.Full, inputDirectoryInfo, outputDirectoryInfo, recycleBinDirectoryInfo, mediaItemCollection);
-                return pipeline.Run();
-            }
+            // Step 1: Scan target directory for changes, update meta & hashes (mark data of non-existent files as "deleted", so that duplicates do not come in again?)
+            // Step 2: Scan input directory for new files, calc meta & hash
+            // Step 3: if collision, move to duplicates, if no collision, move to target
+            var pipeline = CreatePipeline(PipelineKind.Full, inputDirectoryInfo, outputDirectoryInfo,
+                recycleBinDirectoryInfo);
+            return pipeline.Run();
         }
 
-        private static IRunnablePipeline CreatePipeline(PipelineKind kind, DirectoryInfo inputDirectoryInfo, DirectoryInfo outputDirectoryInfo, DirectoryInfo recycleBin, LiteCollection<MediaItemQuickScanInfo> mediaItemCollection)
+        private static IRunnablePipeline CreatePipeline(PipelineKind kind, DirectoryInfo inputDirectoryInfo, DirectoryInfo outputDirectoryInfo, DirectoryInfo recycleBin)
         {
             switch(kind)
             {
@@ -79,10 +75,10 @@
                     return new FileRenamerPipeline(inputDirectoryInfo, outputDirectoryInfo);
 
                 case PipelineKind.Duplicate:
-                    return new DuplicateMediaItemPipeline(inputDirectoryInfo, outputDirectoryInfo, recycleBin, "*.jpg", new AverageHash());
+                    return new DuplicateMediaItemPipeline(inputDirectoryInfo, outputDirectoryInfo, recycleBin, new AverageHash());
 
                 case PipelineKind.Full:
-                    return new FullMediaItemPipeline(mediaItemCollection, inputDirectoryInfo, outputDirectoryInfo, recycleBin);
+                    return new FullMediaItemPipeline(inputDirectoryInfo, outputDirectoryInfo, recycleBin);
 
                 default:
                     throw new ArgumentOutOfRangeException(nameof(kind));

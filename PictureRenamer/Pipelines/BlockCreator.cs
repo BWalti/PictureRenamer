@@ -4,15 +4,14 @@
     using System.Collections.Generic;
     using System.IO;
     using System.Linq;
+    using System.Text.RegularExpressions;
     using System.Threading;
     using System.Threading.Tasks.Dataflow;
     using CoenM.ImageHash;
-    using MetadataExtractor;
-    using MetadataExtractor.Formats.Exif;
     using Serilog;
     using SixLabors.ImageSharp;
+    using SixLabors.ImageSharp.MetaData.Profiles.Exif;
     using Directory = System.IO.Directory;
-    using ImageProcessingException = MetadataExtractor.ImageProcessingException;
 
     public class BlockCreator
     {
@@ -40,39 +39,35 @@
             return DataflowBlock.Encapsulate(input, output);
         }
 
-        public static IPropagatorBlock<PhotoContext, PhotoContext> CreateAnalysisBlock()
+        public static IPropagatorBlock<PhotoContext, PhotoContext> ReadImageMetadataBlock()
         {
-            var output = new BufferBlock<PhotoContext>();
-            var input = new ActionBlock<PhotoContext>(
-                context =>
+            var transformed = new TransformBlock<PhotoContext, PhotoContext>(context =>
+            {
+                if (!context.TryOpen())
                 {
-                    using (Stream imageStream = File.OpenRead(context.Source.FullName))
-                    {
-                        try
-                        {
-                            var metaDataDirectories = ImageMetadataReader.ReadMetadata(imageStream).ToList();
+                    context.Error = new Exception("Could not open image...");
+                }
 
-                            context.ExifIfd0 = metaDataDirectories.OfType<ExifIfd0Directory>().FirstOrDefault();
-                            context.ExifSubIfs = metaDataDirectories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
-                            context.Gps = metaDataDirectories.OfType<GpsDirectory>().FirstOrDefault();
+                //try
+                //{
+                //    var metaDataDirectories = ImageMetadataReader.ReadMetadata(imageStream).ToList();
 
-                            output.Post(context);
-                        }
-                        catch (Exception e)
-                        {
-                            Log.Error(
-                                $"Failed extracting metadata from {context.Source.FullName}. Error: {e.Message}");
+                //    context.ExifIfd0 = metaDataDirectories.OfType<ExifIfd0Directory>().FirstOrDefault();
+                //    context.ExifSubIfs = metaDataDirectories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
+                //    context.Gps = metaDataDirectories.OfType<GpsDirectory>().FirstOrDefault();
+                //}
+                //catch (Exception e)
+                //{
+                //    Log.Error(
+                //        $"Failed extracting metadata from {context.Source.FullName}. Error: {e.Message}");
 
-                            context.Error = e;
-                            output.Post(context);
-                        }
-                    }
-                },
-                new ExecutionDataflowBlockOptions {MaxDegreeOfParallelism = 10});
+                //    context.Error = e;
+                //}
 
-            input.Completion.ContinueWith(task => { output.Complete(); });
+                return context;
+            });
 
-            return DataflowBlock.Encapsulate(input, output);
+            return transformed;
         }
 
         public static IPropagatorBlock<PhotoContext, PhotoContext> CreateHashCalculator(IImageHash imageHasher)
@@ -158,9 +153,9 @@
             return DataflowBlock.Encapsulate(input, output);
         }
 
-        public static IPropagatorBlock<ProcessContext, PhotoContext> CreateFileScannerBlock(
-            bool useInput = true,
-            string filter = "*")
+        private static readonly Regex MediaFileNamePattern = new Regex(@"\.(jpg|png|jpeg|thm|orf|psd|arw|cr2|mov|mp4)", RegexOptions.IgnoreCase);
+
+        public static IPropagatorBlock<ProcessContext, PhotoContext> CreateFileScannerBlock(bool useInput = true)
         {
             var output = new BufferBlock<PhotoContext>();
 
@@ -169,7 +164,9 @@
                 {
                     var contextDirectory = useInput ? context.SourceRoot : context.TargetRoot;
 
-                    var allFiles = contextDirectory.EnumerateFiles(filter, SearchOption.AllDirectories);
+                    var allFiles = contextDirectory
+                        .EnumerateFiles("*", SearchOption.AllDirectories)
+                        .Where(MediaFileFilter);
 
                     foreach (var fileInfo in allFiles)
                     {
@@ -183,14 +180,21 @@
             return DataflowBlock.Encapsulate(input, output);
         }
 
-        public static IPropagatorBlock<PhotoContext, PhotoContext> CreateMoverAction()
+        private static bool MediaFileFilter(FileInfo info)
+        {
+            return MediaFileNamePattern.IsMatch(info.Extension);
+        }
+
+        public static IPropagatorBlock<PhotoContext, PhotoContext> CreateMoverAction(string alternativeTargetPath = null)
         {
             var output = new BufferBlock<PhotoContext>();
 
             var input = new ActionBlock<PhotoContext>(
                 context =>
                 {
-                    var targetFullPath = Path.Combine(context.PossibleTargetPath, context.PossibleTargetFileName);
+                    var targetPath = alternativeTargetPath ?? context.PossibleTargetPath;
+
+                    var targetFullPath = Path.Combine(targetPath, context.Source.Name);
 
                     var counter = 1;
                     var extension = Path.GetExtension(context.PossibleTargetFileName);
@@ -201,18 +205,20 @@
                         var formattedCounter = counter.ToString().PadLeft(3, '0');
 
                         targetFullPath = Path.Combine(
-                            context.PossibleTargetPath,
+                            targetPath,
                             $"{fileNameWithoutExtension}-{formattedCounter}{extension}");
 
                         counter++;
                     }
 
-                    Directory.CreateDirectory(context.PossibleTargetPath);
+                    Directory.CreateDirectory(targetPath);
 
                     Log.Information($"Moving: {context.Source.FullName} to {targetFullPath}");
+                    context.EnsureClosed();
                     File.Move(context.Source.FullName, targetFullPath);
 
-                    context.Target = targetFullPath;
+                    context.Target = new FileInfo(targetFullPath);
+                    output.Post(context);
                 },
                 SingleExecution);
 
@@ -235,9 +241,12 @@
                             return;
                         }
 
-                        var sourceCreationTime = photoContext.Source.CreationTime;
-                        var targetPath = CreateTargetPath(photoContext, sourceCreationTime);
-                        var targetFileName = CreateFileName(sourceCreationTime, "GENERIC", photoContext.Source);
+                        var dateTime = photoContext.Source.CreationTime <= photoContext.Source.LastWriteTime 
+                            ? photoContext.Source.CreationTime 
+                            : photoContext.Source.LastWriteTime;
+
+                        var targetPath = CreateTargetPath(photoContext, dateTime);
+                        var targetFileName = CreateFileName(dateTime, "GENERIC", photoContext.Source);
 
                         photoContext.SetPossibleSolution(targetPath, targetFileName);
                     }
@@ -280,18 +289,14 @@
 
         private static IEnumerable<string> GetDateTime(PhotoContext photoContext)
         {
-            yield return photoContext.ExifIfd0?.GetDescription(ExifDirectoryBase.TagDateTime);
-            yield return photoContext.ExifIfd0?.GetDescription(ExifDirectoryBase.TagDateTimeOriginal);
-            yield return photoContext.ExifIfd0?.GetDescription(ExifDirectoryBase.TagDateTimeDigitized);
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeOriginal)?.Value?.ToString();
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeDigitized)?.Value?.ToString();
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTime)?.Value?.ToString();
 
-            yield return photoContext.ExifSubIfs?.GetDescription(ExifDirectoryBase.TagDateTimeOriginal);
-
-            if (photoContext.Gps != null)
+            var dateStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSDateStamp)?.Value?.ToString();
+            var timeStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSTimestamp)?.Value?.ToString();
+            if (!string.IsNullOrEmpty(dateStamp) && !string.IsNullOrEmpty(timeStamp))
             {
-                yield return photoContext.Gps.GetDescription(ExifDirectoryBase.TagDateTimeOriginal);
-
-                var timeStamp = photoContext.Gps.GetDescription(GpsDirectory.TagTimeStamp);
-                var dateStamp = photoContext.Gps.GetDescription(GpsDirectory.TagDateStamp);
                 yield return $"{dateStamp} {timeStamp.Substring(0, 8)}";
             }
 
@@ -300,7 +305,7 @@
 
         private static IEnumerable<string> GetModel(PhotoContext photoContext)
         {
-            yield return photoContext.ExifIfd0?.GetDescription(ExifDirectoryBase.TagModel)?.Trim();
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.Model)?.Value?.ToString();
 
             yield return "GENERIC";
         }

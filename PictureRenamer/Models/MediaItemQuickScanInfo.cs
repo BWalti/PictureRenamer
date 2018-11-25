@@ -1,8 +1,8 @@
 ﻿namespace PictureRenamer
 {
     using System;
-    using System.Collections.Generic;
     using LiteDB;
+    using PictureRenamer.Pipelines;
 
     public class MediaItemQuickScanInfo
     {
@@ -18,16 +18,7 @@
         public DateTime? LastWriteTimeUtc { get; set; }
 
         public ulong? Hash { get; set; }
-
-        public ExifInfos Exif { get; set; }
-    }
-
-    public class ExifInfos
-    {
-        public Dictionary<int, string> ExifIfd0 { get; set; }
-
-        public Dictionary<int, string> ExifSubIfs { get; set; }
-
-        public Dictionary<int, string> Gps { get; set; }
+        public DateTime? CreationTimeUtc { get; set; }
+        public CustomMetaData MetaData { get; set; }
     }
 }
