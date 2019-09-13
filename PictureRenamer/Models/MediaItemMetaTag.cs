@@ -1,4 +1,4 @@
-﻿namespace PictureRenamer
+﻿namespace PictureRenamer.Models
 {
     using System;
 

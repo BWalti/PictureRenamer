@@ -1,13 +1,10 @@
 ﻿namespace PictureRenamer
 {
     using System;
-    using System.Collections.Generic;
     using System.IO;
-    using System.Linq;
     using Serilog;
     using SixLabors.ImageSharp;
     using SixLabors.ImageSharp.MetaData;
-    using SixLabors.ImageSharp.MetaData.Profiles.Exif;
     using SixLabors.ImageSharp.PixelFormats;
 
     public class PhotoContext : IDisposable
@@ -27,7 +24,7 @@
 
         public bool HasError => this.Error != null;
 
-        public ulong Hash { get; set; }
+        public ulong? Hash { get; set; }
 
         public string PossibleTargetFileName { get; private set; }
 

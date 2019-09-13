@@ -1,4 +1,4 @@
-﻿namespace PictureRenamer
+﻿namespace PictureRenamer.Models
 {
     using System;
     using LiteDB;
@@ -20,5 +20,6 @@
         public ulong? Hash { get; set; }
         public DateTime? CreationTimeUtc { get; set; }
         public CustomMetaData MetaData { get; set; }
+        public bool Deleted { get; set; }
     }
 }

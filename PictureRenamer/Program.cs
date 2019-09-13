@@ -30,15 +30,13 @@
 
         private static Task Run()
         {
-            // var input = @"C:\Users\bwalt\Pictures\DiGa Möbel";
-            // var output = @"C:\Users\bwalt\Pictures\DiGa Möbel";
-            //var input = @"Z:\Import-Queue";
-            //var output = @"Z:\Processed";
-            //var recycleBin = @"Z:\Duplicates";
+            var input = @"Y:\Import-Queue";
+            var output = @"Y:\Processed";
+            var recycleBin = @"Y:\Duplicates";
 
-            var input = @"D:\PicRenameSpielwiese\Input";
-            var output = @"D:\PicRenameSpielwiese\Processed";
-            var recycleBin = @"D:\PicRenameSpielwiese\Recycle";
+            //var input = @"D:\PicRenameSpielwiese\Input";
+            //var output = @"D:\PicRenameSpielwiese\Processed";
+            //var recycleBin = @"D:\PicRenameSpielwiese\Recycle";
 
             var inputDirectoryInfo = new DirectoryInfo(input);
             var outputDirectoryInfo = new DirectoryInfo(output);
@@ -62,11 +60,10 @@
             // Step 1: Scan target directory for changes, update meta & hashes (mark data of non-existent files as "deleted", so that duplicates do not come in again?)
             // Step 2: Scan input directory for new files, calc meta & hash
             // Step 3: if collision, move to duplicates, if no collision, move to target
-            var pipeline = CreatePipeline(PipelineKind.Full, inputDirectoryInfo, outputDirectoryInfo,
-                recycleBinDirectoryInfo);
+            var pipeline = CreatePipeline(PipelineKind.Full, inputDirectoryInfo, outputDirectoryInfo, recycleBinDirectoryInfo);
             return pipeline.Run();
         }
-
+        
         private static IRunnablePipeline CreatePipeline(PipelineKind kind, DirectoryInfo inputDirectoryInfo, DirectoryInfo outputDirectoryInfo, DirectoryInfo recycleBin)
         {
             switch(kind)
@@ -80,6 +77,9 @@
                 case PipelineKind.Full:
                     return new FullMediaItemPipeline(inputDirectoryInfo, outputDirectoryInfo, recycleBin);
 
+                case PipelineKind.TimeStampMissmatch:
+                    return new ScanForTimeStampMissmatchPipeline(outputDirectoryInfo);
+                    
                 default:
                     throw new ArgumentOutOfRangeException(nameof(kind));
             }
@@ -90,6 +90,7 @@
     {
         Rename,
         Duplicate,
-        Full
+        Full,
+        TimeStampMissmatch
     }
 }

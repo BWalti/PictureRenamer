@@ -48,22 +48,6 @@
                     context.Error = new Exception("Could not open image...");
                 }
 
-                //try
-                //{
-                //    var metaDataDirectories = ImageMetadataReader.ReadMetadata(imageStream).ToList();
-
-                //    context.ExifIfd0 = metaDataDirectories.OfType<ExifIfd0Directory>().FirstOrDefault();
-                //    context.ExifSubIfs = metaDataDirectories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
-                //    context.Gps = metaDataDirectories.OfType<GpsDirectory>().FirstOrDefault();
-                //}
-                //catch (Exception e)
-                //{
-                //    Log.Error(
-                //        $"Failed extracting metadata from {context.Source.FullName}. Error: {e.Message}");
-
-                //    context.Error = e;
-                //}
-
                 return context;
             });
 
@@ -104,9 +88,9 @@
             }
         }
 
-        public static IPropagatorBlock<IEnumerable<PhotoContext>, Dictionary<ulong, List<PhotoContext>>> FindExactMatches()
+        public static IPropagatorBlock<IEnumerable<PhotoContext>, Dictionary<ulong?, List<PhotoContext>>> FindExactMatches()
         {
-            var output = new BufferBlock<Dictionary<ulong, List<PhotoContext>>>();
+            var output = new BufferBlock<Dictionary<ulong?, List<PhotoContext>>>();
 
             var input = new ActionBlock<IEnumerable<PhotoContext>>(
                 context =>
@@ -143,6 +127,9 @@
                             Log.Debug($"Skipping: {context.Source.FullName}");
                             return;
                         }
+
+                        Log.Warning($"context HasError, but is not a skipped type: {context.Source.FullName}");
+                        return;
                     }
 
                     output.Post(context);
@@ -180,7 +167,7 @@
             return DataflowBlock.Encapsulate(input, output);
         }
 
-        private static bool MediaFileFilter(FileInfo info)
+        public static bool MediaFileFilter(FileInfo info)
         {
             return MediaFileNamePattern.IsMatch(info.Extension);
         }
@@ -194,7 +181,7 @@
                 {
                     var targetPath = alternativeTargetPath ?? context.PossibleTargetPath;
 
-                    var targetFullPath = Path.Combine(targetPath, context.Source.Name);
+                    var targetFullPath = Path.Combine(targetPath, context.PossibleTargetFileName ?? context.Source.Name);
 
                     var counter = 1;
                     var extension = Path.GetExtension(context.PossibleTargetFileName);
@@ -252,8 +239,8 @@
                     }
                     else
                     {
-                        var model = GetModel(photoContext).FirstOrDefault(s => !string.IsNullOrEmpty(s));
-                        var dateTime = GetDateTime(photoContext).FirstOrDefault(s => !string.IsNullOrEmpty(s));
+                        var camera = GetCameraDescription(photoContext);
+                        var dateTime = GetDateTime(photoContext).FirstOrDefault(s => !string.IsNullOrEmpty(s) && s != "0000:00:00 00:00:00");
 
                         var parsedDateTime = DateTime.ParseExact(
                             dateTime,
@@ -261,7 +248,7 @@
                             Thread.CurrentThread.CurrentCulture);
 
                         var targetPath = CreateTargetPath(photoContext, parsedDateTime);
-                        var targetFilePath = CreateFileName(parsedDateTime, model, photoContext.Source);
+                        var targetFilePath = CreateFileName(parsedDateTime, camera, photoContext.Source);
 
                         photoContext.SetPossibleSolution(targetPath, targetFilePath);
                     }
@@ -272,6 +259,22 @@
             input.Completion.ContinueWith(task => { output.Complete(); });
 
             return DataflowBlock.Encapsulate(input, output);
+        }
+
+        public static IEnumerable<string> GetDateTime(PhotoContext photoContext)
+        {
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeOriginal)?.Value?.ToString();
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeDigitized)?.Value?.ToString();
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTime)?.Value?.ToString();
+
+            var dateStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSDateStamp)?.Value?.ToString();
+            var timeStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSTimestamp)?.Value?.ToString();
+            if (!string.IsNullOrEmpty(dateStamp) && !string.IsNullOrEmpty(timeStamp))
+            {
+                yield return $"{dateStamp} {timeStamp.Substring(0, 8)}";
+            }
+
+            yield return photoContext.Source.LastWriteTimeUtc.ToString("yyyy:MM:dd HH:mm:ss");
         }
 
         private static string CreateFileName(DateTime parsedDateTime, string model, FileSystemInfo inputFile)
@@ -287,20 +290,18 @@
                 dateTime.Month.ToString().PadLeft(2, '0'));
         }
 
-        private static IEnumerable<string> GetDateTime(PhotoContext photoContext)
+        private static string GetCameraDescription(PhotoContext photoContext)
         {
-            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeOriginal)?.Value?.ToString();
-            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTimeDigitized)?.Value?.ToString();
-            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.DateTime)?.Value?.ToString();
+            var make = GetMake(photoContext).FirstOrDefault();
+            var model = GetModel(photoContext).FirstOrDefault();
 
-            var dateStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSDateStamp)?.Value?.ToString();
-            var timeStamp = photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.GPSTimestamp)?.Value?.ToString();
-            if (!string.IsNullOrEmpty(dateStamp) && !string.IsNullOrEmpty(timeStamp))
-            {
-                yield return $"{dateStamp} {timeStamp.Substring(0, 8)}";
-            }
+            var parts = new []{make, model}.Where(i => i != null).Select(s => s.Trim());
+            return string.Join("-", parts);
+        }
 
-            yield return photoContext.Source.CreationTime.ToString("yyyy:MM:dd HH:mm:ss");
+        private static IEnumerable<string> GetMake(PhotoContext photoContext)
+        {
+            yield return photoContext.RgbaImage?.MetaData?.ExifProfile?.GetValue(ExifTag.Make)?.Value?.ToString();
         }
 
         private static IEnumerable<string> GetModel(PhotoContext photoContext)

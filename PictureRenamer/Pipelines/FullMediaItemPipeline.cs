@@ -8,6 +8,7 @@
     using CoenM.ImageHash;
     using CoenM.ImageHash.HashAlgorithms;
     using LiteDB;
+    using PictureRenamer.Models;
     using Serilog;
     using SixLabors.ImageSharp.MetaData;
     using SixLabors.ImageSharp.MetaData.Profiles.Exif;
@@ -45,6 +46,8 @@
         /// <returns></returns>
         public Task Run()
         {
+            this.ScanTarget();
+
             var fileScannerBlock = BlockCreator.CreateFileScannerBlock();
             var hashBlock = this.CreateHashBlock();
 
@@ -93,26 +96,173 @@
                 finish.Completion);
         }
 
+        private void ScanTarget()
+        {
+            // gets all files:
+            var allFiles = this.outputDirectoryInfo
+                .EnumerateFiles("*", SearchOption.AllDirectories)
+                .Where(BlockCreator.MediaFileFilter)
+                .ToList();
+
+            var allItems = this.mediaItemCollection.FindAll().ToList();
+
+            var allKeys = allItems.Select(item => item.FullName).Concat(allFiles.Select(file => file.FullName)).Distinct().ToList();
+
+            var crossOuterJoinResult = (from key in allKeys
+                join file in allFiles on key equals file.FullName
+                join item in allItems on key equals item.FullName
+                select new {Key = key, File = file, Item = item}).ToList();
+
+            foreach (var element in crossOuterJoinResult)
+            {
+                if (element.File == null && !element.Item.Deleted)
+                {
+                    // has been removed, mark meta as deleted:
+                    element.Item.Deleted = true;
+                    this.mediaItemCollection.Update(element.Item);
+                }
+                else if (element.Item == null)
+                {
+                    // new file!
+                    var context = new PhotoContext(element.File, null);
+                    context.TryOpen();
+                    context.Hash = this.imageHasher.Hash(context.RgbaImage);
+                    var newItem = this.ConvertToMediaItemQuickScanInfoBeforeMove(context);
+
+                    this.mediaItemCollection.Insert(newItem);
+                    context.Dispose();
+                } 
+                else if (element.File != null && element.Item != null)
+                {
+                    // existing file, may have changed..?
+                    if (!element.File.LastWriteTime.Equals(element.Item.LastWriteTimeUtc))
+                    {
+                        // update hash and meta data:
+                        var context = new PhotoContext(element.File, null);
+                        context.TryOpen();
+                        context.Hash = this.imageHasher.Hash(context.RgbaImage);
+                        
+                        var newItem = this.ConvertToMediaItemQuickScanInfoBeforeMove(context);
+
+                        element.Item.Hash = newItem.Hash;
+                        element.Item.MetaData = newItem.MetaData;
+
+                        this.mediaItemCollection.Update(element.Item);
+                        context.Dispose();
+                    }
+                }
+            }
+        }
+
+        //private ITargetBlock<PhotoContext> EnsureMetaData(IPropagatorBlock<PhotoContext, PhotoContext> hasherBlock, IPropagatorBlock<PhotoContext, PhotoContext> analysisBlock, ITargetBlock<PhotoContext> continueWith)
+        //{
+        //    var input = new ActionBlock<PhotoContext>(context =>
+        //    {
+        //        var existing = this.mediaItemCollection.FindOne(item  => item.FullName == context.Source.FullName);
+        //        if (existing != null)
+        //        {
+        //            // if we did not yet calculate a hash on the context, and there is none saved OR the last modify date changed,
+        //            // we need to calculate the hash and update the meta data (second run)
+        //            if (!context.Hash.HasValue && (existing.Hash == null || existing.LastWriteTimeUtc != context.Source.LastWriteTimeUtc))
+        //            {
+        //                Log.Information($"Updating hash for {context.Source.FullName}...");
+        //                hasherBlock.Post(context);
+        //            } 
+        //            else if (context.Hash.HasValue)
+        //            {
+        //                existing.Hash = context.Hash;
+        //                this.mediaItemCollection.Update(existing);
+        //            }
+        //            else if (context.MetaData == null && (existing.MetaData == null ||
+        //                                                  existing.LastWriteTimeUtc != context.Source.LastWriteTimeUtc))
+        //            {
+        //                Log.Information($"Updating meta data for {context.Source.FullName}...");
+        //                analysisBlock.Post(context);
+        //            }
+        //            else if (context.MetaData != null)
+        //            {
+        //                existing.MetaData = this.ConvertMetaData(context.MetaData);
+        //                this.mediaItemCollection.Update(existing);
+        //            }
+        //            else
+        //            {
+        //                continueWith.Post(context);
+        //            }
+        //        }
+        //    });
+
+        //    input.Completion.ContinueWith(task =>
+        //    {
+        //        hasherBlock.Complete();
+        //        analysisBlock.Complete();
+        //        continueWith.Complete();
+        //    });
+
+        //    return input;
+        //}
+
+        //private IPropagatorBlock<DirectoryInfo, PhotoContext> CreateScannerBlock()
+        //{
+        //    var output = new BufferBlock<PhotoContext>();
+
+        //    var input = new ActionBlock<DirectoryInfo>(info =>
+        //    {
+        //        var allFiles = info
+        //            .EnumerateFiles("*", SearchOption.AllDirectories)
+        //            .Where(BlockCreator.MediaFileFilter);
+
+        //        foreach (var fileInfo in allFiles)
+        //        {
+        //            output.Post(new PhotoContext(fileInfo, null));
+        //        }
+        //    });
+
+        //    input.Completion.ContinueWith(task => output.Complete());
+
+        //    return DataflowBlock.Encapsulate(input, output);
+        //}
+
         private ITargetBlock<PhotoContext[]> CreateRegisterMetadataBlock()
         {
             return new ActionBlock<PhotoContext[]>(contexts =>
             {
-                var converted = contexts.Select(context => new MediaItemQuickScanInfo
-                {
-                    FullName = context.Target.FullName,
-                    LastWriteTimeUtc = context.Target.LastWriteTimeUtc,
-                    CreationTimeUtc = context.Target.CreationTimeUtc,
-                    Hash = context.Hash,
-                    Length = context.Target.Length,
-                    Name = context.Target.Name,
-                    MetaData = this.ConvertMetaData(context.MetaData)
-                    //ExifValues = context.ExifValues,
-                    //ImageProperties = context.ImageProperties
-                });
+                var converted = contexts.Where(c => !c.HasError).Select(this.ConvertToMediaItemQuickScanInfoAfterMove);
 
                 var insertBulk = this.mediaItemCollection.InsertBulk(converted);
                 Log.Information($"Inserted {insertBulk}# image media into db");
             });
+        }
+
+        private MediaItemQuickScanInfo ConvertToMediaItemQuickScanInfoAfterMove(PhotoContext context)
+        {
+            return new MediaItemQuickScanInfo
+            {
+                FullName = context.Target.FullName,
+                LastWriteTimeUtc = context.Target.LastWriteTimeUtc,
+                CreationTimeUtc = context.Target.CreationTimeUtc,
+                Hash = context.Hash,
+                Length = context.Target.Length,
+                Name = context.Target.Name,
+                MetaData = this.ConvertMetaData(context.MetaData)
+                //ExifValues = context.ExifValues,
+                //ImageProperties = context.ImageProperties
+            };
+        }
+
+        private MediaItemQuickScanInfo ConvertToMediaItemQuickScanInfoBeforeMove(PhotoContext context)
+        {
+            return new MediaItemQuickScanInfo
+            {
+                FullName = context.Source.FullName,
+                LastWriteTimeUtc = context.Source.LastWriteTimeUtc,
+                CreationTimeUtc = context.Source.CreationTimeUtc,
+                Hash = context.Hash,
+                Length = context.Source.Length,
+                Name = context.Source.Name,
+                MetaData = this.ConvertMetaData(context.MetaData)
+                //ExifValues = context.ExifValues,
+                //ImageProperties = context.ImageProperties
+            };
         }
 
         private CustomMetaData ConvertMetaData(ImageMetaData contextMetaData)
@@ -225,53 +375,5 @@
         {
             this.db?.Dispose();
         }
-    }
-
-    public class CustomMetaData
-    {
-        public double HorizontalResolution { get; set; }
-        public string WhiteBalance { get; set; }
-        public string Software { get; set; }
-        public string SensingMethod2 { get; set; }
-        public string SensingMethod { get; set; }
-        public string SceneCaptureType { get; set; }
-        public string SceneType { get; set; }
-        public string SelfTimerMode { get; set; }
-        public string Saturation { get; set; }
-        public string PixelScale { get; set; }
-        public string PixelYDimension { get; set; }
-        public string PixelXDimension { get; set; }
-        public string Orientation { get; set; }
-        public string ISOSpeed { get; set; }
-        public string GPSSatellites { get; set; }
-        public string GPSDateStamp { get; set; }
-        public string GPSTimestamp { get; set; }
-        public string GPSLongitude { get; set; }
-        public string GPSLatitude { get; set; }
-        public string DigitalZoomRatio { get; set; }
-        public string FocalLength { get; set; }
-        public string Model { get; set; }
-        public string Make { get; set; }
-        public string LensSerialNumber { get; set; }
-        public string LensInfo { get; set; }
-        public string LensModel { get; set; }
-        public string LensMake { get; set; }
-        public string FNumber { get; set; }
-        public string ExposureTime { get; set; }
-        public string ExposureProgram { get; set; }
-        public string ExposureMode { get; set; }
-        public string RecommendedExposureIndex { get; set; }
-        public string ExposureIndex2 { get; set; }
-        public string ExposureIndex { get; set; }
-        public string DateTime { get; set; }
-        public string DateTimeOriginal { get; set; }
-        public string DateTimeDigitized { get; set; }
-        public string BrightnessValue { get; set; }
-        public string BatteryLevel { get; set; }
-        public string AmbientTemperature { get; set; }
-        public string ShutterSpeed { get; set; }
-        public string Aperture { get; set; }
-        public PixelResolutionUnit ResolutionUnits { get; set; }
-        public double VerticalResolution { get; set; }
     }
 }

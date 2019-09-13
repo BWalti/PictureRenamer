@@ -38,7 +38,7 @@
             var hashCalculator = BlockCreator.CreateHashCalculator(this.imageHasher);
             var collectedHashes = BlockCreator.CollectAll<PhotoContext>();
             var findDuplicates = BlockCreator.FindExactMatches();
-            var processDuplicates = new ActionBlock<Dictionary<ulong, List<PhotoContext>>>(
+            var processDuplicates = new ActionBlock<Dictionary<ulong?, List<PhotoContext>>>(
                 dict =>
                 {
                     Log.Warning($"Found {dict.Count}# images with duplicates:");
