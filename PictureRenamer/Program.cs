@@ -34,10 +34,9 @@
             var output = @"Y:\Processed";
             var recycleBin = @"Y:\Duplicates";
 
-            //var input = @"D:\PicRenameSpielwiese\Input";
-            //var output = @"D:\PicRenameSpielwiese\Processed";
-            //var recycleBin = @"D:\PicRenameSpielwiese\Recycle";
-
+            // var input = @"D:\PicRenameSpielwiese\Input";
+            // var output = @"D:\PicRenameSpielwiese\Processed";
+            // var recycleBin = @"D:\PicRenameSpielwiese\Recycle";
             var inputDirectoryInfo = new DirectoryInfo(input);
             var outputDirectoryInfo = new DirectoryInfo(output);
             var recycleBinDirectoryInfo = new DirectoryInfo(recycleBin);
@@ -66,7 +65,7 @@
         
         private static IRunnablePipeline CreatePipeline(PipelineKind kind, DirectoryInfo inputDirectoryInfo, DirectoryInfo outputDirectoryInfo, DirectoryInfo recycleBin)
         {
-            switch(kind)
+            switch (kind)
             {
                 case PipelineKind.Rename:
                     return new FileRenamerPipeline(inputDirectoryInfo, outputDirectoryInfo);
@@ -77,20 +76,12 @@
                 case PipelineKind.Full:
                     return new FullMediaItemPipeline(inputDirectoryInfo, outputDirectoryInfo, recycleBin);
 
-                case PipelineKind.TimeStampMissmatch:
+                case PipelineKind.TimeStampMismatch:
                     return new ScanForTimeStampMissmatchPipeline(outputDirectoryInfo);
                     
                 default:
                     throw new ArgumentOutOfRangeException(nameof(kind));
             }
         }
-    }
-
-    public enum PipelineKind
-    {
-        Rename,
-        Duplicate,
-        Full,
-        TimeStampMissmatch
     }
 }

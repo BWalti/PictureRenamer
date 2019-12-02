@@ -1,6 +1,7 @@
 ﻿namespace PictureRenamer.Pipelines
 {
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Threading.Tasks;
@@ -8,6 +9,7 @@
     using CoenM.ImageHash;
     using CoenM.ImageHash.HashAlgorithms;
     using LiteDB;
+
     using PictureRenamer.Models;
     using Serilog;
     using SixLabors.ImageSharp.MetaData;
@@ -81,7 +83,7 @@
                 Log.Information("Moving to recycle bin completed..");
             });
 
-            var dbDisposed = registerMetadata.Completion.ContinueWith(task =>
+            var databaseDisposed = registerMetadata.Completion.ContinueWith(task =>
             {
                 Log.Information("Processing of new pictures completed..");
                 this.db.Dispose();
@@ -92,10 +94,10 @@
             fileScannerBlock.Complete();
 
             return Task.WhenAll(
-                dbDisposed, 
+                databaseDisposed, 
                 finish.Completion);
         }
-
+        
         private void ScanTarget()
         {
             // gets all files:
@@ -106,13 +108,12 @@
 
             var allItems = this.mediaItemCollection.FindAll().ToList();
 
-            var allKeys = allItems.Select(item => item.FullName).Concat(allFiles.Select(file => file.FullName)).Distinct().ToList();
-
-            var crossOuterJoinResult = (from key in allKeys
-                join file in allFiles on key equals file.FullName
-                join item in allItems on key equals item.FullName
-                select new {Key = key, File = file, Item = item}).ToList();
-
+            var crossOuterJoinResult = allFiles.FullOuterJoin(
+                allItems,
+                info => info.FullName,
+                info => info.FullName,
+                (info, scanInfo) => new { Key = info?.FullName ?? scanInfo?.FullName, File = info, Item = scanInfo }).ToList();
+            
             foreach (var element in crossOuterJoinResult)
             {
                 if (element.File == null && !element.Item.Deleted)
@@ -126,22 +127,25 @@
                     // new file!
                     var context = new PhotoContext(element.File, null);
                     context.TryOpen();
-                    context.Hash = this.imageHasher.Hash(context.RgbaImage);
-                    var newItem = this.ConvertToMediaItemQuickScanInfoBeforeMove(context);
+                    if (context.RgbaImage != null)
+                    {
+                        context.Hash = this.imageHasher.Hash(context.RgbaImage);
+                        var newItem = this.ConvertToMediaItemQuickScanInfoBeforeMove(context);
 
-                    this.mediaItemCollection.Insert(newItem);
-                    context.Dispose();
+                        this.mediaItemCollection.Insert(newItem);
+                        context.Dispose();
+                    }
                 } 
-                else if (element.File != null && element.Item != null)
+                else if (element.File != null)
                 {
-                    // existing file, may have changed..?
                     if (!element.File.LastWriteTime.Equals(element.Item.LastWriteTimeUtc))
                     {
+                        // existing file, has changed
                         // update hash and meta data:
                         var context = new PhotoContext(element.File, null);
                         context.TryOpen();
                         context.Hash = this.imageHasher.Hash(context.RgbaImage);
-                        
+
                         var newItem = this.ConvertToMediaItemQuickScanInfoBeforeMove(context);
 
                         element.Item.Hash = newItem.Hash;
