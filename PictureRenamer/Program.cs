@@ -2,6 +2,7 @@
 {
     using System;
     using System.IO;
+    using System.Linq;
     using System.Threading.Tasks;
     using CoenM.ImageHash.HashAlgorithms;
     using Microsoft.Extensions.Configuration;
@@ -22,10 +23,46 @@
             Log.Logger = new LoggerConfiguration()
                 .ReadFrom.Configuration(configuration)
                 .CreateLogger();
+            
+            //FindFileChangeDeltas();
 
             Run().Wait();
 
             Log.CloseAndFlush();
+        }
+
+        private static void FindFileChangeDeltas()
+        {
+            var input = @"Y:\Import-Queue";
+            var di = new DirectoryInfo(input);
+            var files = di.EnumerateFiles("*.*", SearchOption.AllDirectories);
+
+            var firstIteration = files.ToList();
+            Console.WriteLine($"Found {firstIteration.Count} files! Press any key for next scan...");
+            Console.ReadKey();
+
+            var secondIteration = files.ToList();
+            Console.WriteLine($"Found {secondIteration.Count} files!");
+
+            var joined = firstIteration.FullOuterJoin(
+                    secondIteration,
+                    info => new { info.FullName, info.LastWriteTimeUtc, info.Length },
+                    info => new { info.FullName, info.LastWriteTimeUtc, info.Length },
+                    (infoOld, infoNew) => new { Old = infoOld, New = infoNew })
+                .ToList();
+
+            foreach (var j in joined)
+            {
+                if (j.Old == null
+                    || j.New == null)
+                {
+                    // something changed!
+                }
+                else
+                {
+                    Log.Debug($"{j.Old.FullName} did not change.");
+                }
+            }
         }
 
         private static Task Run()
